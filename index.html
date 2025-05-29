@@ -1,0 +1,1465 @@
+import React, { useState, useCallback } from 'react';
+import { Calendar, Users, Clock, Settings, Download, Upload, Play } from 'lucide-react';
+
+const ShiftScheduler = () => {
+  const [employees, setEmployees] = useState([
+    { 
+      id: 1, 
+      name: '田中太郎', 
+      type: '社員', 
+      maxHours: 40, 
+      availableDays: ['月','火','水','木','金'], 
+      minRestDays: 2,
+      maxConsecutiveDays: 5,
+      canWorkNight: true,
+      preferredShifts: ['morning', 'afternoon'],
+      skillLevel: 'senior',
+      hourlyRate: 2000,
+      ngCombinations: [2], // 佐藤花子とNG
+      ngShifts: ['night'], // 夜勤NG
+      mustWorkWith: [], // 必須ペア
+      cannotOpenStore: false, // 開店業務不可
+      cannotCloseStore: false, // 閉店業務不可
+      needsSupervision: false, // 監督が必要
+      canSupervise: true, // 監督可能
+      fixedShifts: {} // 固定シフト {日付: シフトID}
+    },
+    { 
+      id: 2, 
+      name: '佐藤花子', 
+      type: 'パート', 
+      maxHours: 25, 
+      availableDays: ['月','水','金','土','日'], 
+      minRestDays: 1,
+      maxConsecutiveDays: 3,
+      canWorkNight: false,
+      preferredShifts: ['morning'],
+      skillLevel: 'intermediate',
+      hourlyRate: 1200,
+      ngCombinations: [1, 3], // 田中太郎、鈴木一郎とNG
+      ngShifts: ['afternoon'], // 遅番NG
+      mustWorkWith: [],
+      cannotOpenStore: false,
+      cannotCloseStore: true, // 閉店業務不可
+      needsSupervision: true, // 監督が必要
+      canSupervise: false,
+      fixedShifts: {}
+    },
+    { 
+      id: 3, 
+      name: '鈴木一郎', 
+      type: '社員', 
+      maxHours: 40, 
+      availableDays: ['火','水','木','金','土'], 
+      minRestDays: 2,
+      maxConsecutiveDays: 5,
+      canWorkNight: true,
+      preferredShifts: ['afternoon', 'night'],
+      skillLevel: 'senior',
+      hourlyRate: 2200,
+      ngCombinations: [],
+      ngShifts: [],
+      mustWorkWith: [4], // 高橋美咲と必須ペア
+      cannotOpenStore: false,
+      cannotCloseStore: false,
+      needsSupervision: false,
+      canSupervise: true,
+      fixedShifts: {}
+    },
+    { 
+      id: 4, 
+      name: '高橋美咲', 
+      type: 'パート', 
+      maxHours: 20, 
+      availableDays: ['月','火','木','日'], 
+      minRestDays: 2,
+      maxConsecutiveDays: 3,
+      canWorkNight: false,
+      preferredShifts: ['morning', 'afternoon'],
+      skillLevel: 'beginner',
+      hourlyRate: 1000,
+      ngCombinations: [],
+      ngShifts: [],
+      mustWorkWith: [],
+      cannotOpenStore: true, // 開店業務不可
+      cannotCloseStore: true, // 閉店業務不可
+      needsSupervision: true, // 監督が必要
+      canSupervise: false,
+      fixedShifts: { '15': 'morning' } // 15日は早番固定
+    }
+  ]);
+
+  const [shiftConstraints, setShiftConstraints] = useState({
+    morning: { needsOpener: true, needsSupervisor: true, minStaff: 2, maxStaff: 4 },
+    afternoon: { needsOpener: false, needsSupervisor: true, minStaff: 2, maxStaff: 5 },
+    night: { needsOpener: false, needsSupervisor: true, minStaff: 1, maxStaff: 2, needsCloser: true }
+  });
+
+  const [businessTasks, setBusinessTasks] = useState([
+    { id: 'open', name: '開店業務', description: '店舗の開店準備、レジ起動、清掃確認' },
+    { id: 'close', name: '閉店業務', description: '売上確認、レジ締め、店舗施錠' },
+    { id: 'cash_management', name: '金銭管理', description: 'レジ金の管理、売上計算' },
+    { id: 'inventory', name: '在庫管理', description: '商品補充、発注業務' }
+  ]);
+
+  const [ngCombinationRules, setNgCombinationRules] = useState([
+    { id: 1, employee1: 1, employee2: 2, reason: '勤務スタイルの違い', isActive: true },
+    { id: 2, employee1: 2, employee2: 3, reason: 'コミュニケーション問題', isActive: true }
+  ]);
+
+  const [showBusinessTaskManager, setShowBusinessTaskManager] = useState(false);
+  const [showNGRuleManager, setShowNGRuleManager] = useState(false);
+  const [newBusinessTask, setNewBusinessTask] = useState({ name: '', description: '' });
+  const [newNGRule, setNewNGRule] = useState({ employee1: '', employee2: '', reason: '' });
+  const [editingTask, setEditingTask] = useState(null);
+  const [editingNGRule, setEditingNGRule] = useState(null);
+
+  const [globalConstraints, setGlobalConstraints] = useState({
+    maxConsecutiveDays: 5,
+    minRestBetweenShifts: 12,
+    noBackToBackNightShifts: true,
+    weekendRequirement: { 社員: 1, パート: 1 },
+    supervisionRatio: 0.5, // 監督者の割合
+    allowSameShiftNGCombos: false // 同じシフト内でのNG組み合わせを許可するか
+  });
+
+  const [showAddEmployee, setShowAddEmployee] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState(null);
+  const [newEmployee, setNewEmployee] = useState({
+    name: '',
+    type: '社員',
+    maxHours: 40,
+    availableDays: [],
+    minRestDays: 2,
+    maxConsecutiveDays: 5,
+    canWorkNight: true,
+    preferredShifts: [],
+    skillLevel: 'intermediate',
+    hourlyRate: 1500,
+    ngCombinations: [],
+    ngShifts: [],
+    mustWorkWith: [],
+    cannotOpenStore: false,
+    cannotCloseStore: false,
+    needsSupervision: false,
+    canSupervise: false,
+    fixedShifts: {}
+  });
+
+  const [showConstraintSettings, setShowConstraintSettings] = useState(false);
+
+  const [shiftTypes] = useState([
+    { id: 'morning', name: '早番', time: '09:00-17:00', hours: 8, requiredStaff: { 社員: 1, パート: 1 } },
+    { id: 'afternoon', name: '遅番', time: '13:00-21:00', hours: 8, requiredStaff: { 社員: 1, パート: 1 } },
+    { id: 'night', name: '夜勤', time: '21:00-09:00', hours: 8, requiredStaff: { 社員: 1, パート: 0 } }
+  ]);
+
+  const [constraints] = useState({
+    maxConsecutiveDays: 5,
+    minRestBetweenShifts: 12, // 時間
+    noBackToBackNightShifts: true,
+    weekendRequirement: { 社員: 1, パート: 1 }
+  });
+
+  const [currentMonth, setCurrentMonth] = useState('2025-07');
+  const [requestedDaysOff, setRequestedDaysOff] = useState({});
+  const [generatedSchedule, setGeneratedSchedule] = useState({});
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // 月の日数を取得
+  const getDaysInMonth = (monthStr) => {
+    const [year, month] = monthStr.split('-');
+    return new Date(year, month, 0).getDate();
+  };
+
+  // 曜日を取得
+  const getDayOfWeek = (monthStr, day) => {
+    const [year, month] = monthStr.split('-');
+    const date = new Date(year, month - 1, day);
+    const days = ['日', '月', '火', '水', '木', '金', '土'];
+    return days[date.getDay()];
+  };
+
+  // 希望休の設定
+  const toggleRequestedDayOff = (employeeId, day) => {
+    const key = `${employeeId}-${day}`;
+    setRequestedDaysOff(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  // シフト自動生成アルゴリズム
+  const generateSchedule = useCallback(() => {
+    setIsGenerating(true);
+    
+    setTimeout(() => {
+      const daysInMonth = getDaysInMonth(currentMonth);
+      const newSchedule = {};
+      
+      // 各従業員の作業時間と連続勤務日数を追跡
+      const employeeStats = {};
+      employees.forEach(emp => {
+        employeeStats[emp.id] = {
+          totalHours: 0,
+          consecutiveDays: 0,
+          lastShiftEnd: null,
+          workedDays: []
+        };
+      });
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dayOfWeek = getDayOfWeek(currentMonth, day);
+        const isWeekend = dayOfWeek === '土' || dayOfWeek === '日';
+        
+        shiftTypes.forEach(shiftType => {
+          const shiftKey = `${day}-${shiftType.id}`;
+          newSchedule[shiftKey] = [];
+          
+          // 固定シフトの従業員を最初に配置
+          const fixedEmployees = employees.filter(emp => 
+            emp.fixedShifts[day] === shiftType.id
+          );
+          
+          fixedEmployees.forEach(emp => {
+            newSchedule[shiftKey].push(emp.id);
+            employeeStats[emp.id].totalHours += shiftType.hours;
+            employeeStats[emp.id].consecutiveDays++;
+            employeeStats[emp.id].workedDays.push(day);
+          });
+
+          // 必要人数を満たすために従業員を割り当て
+          const requiredStaff = shiftType.requiredStaff;
+          const currentStaff = { 社員: 0, パート: 0 };
+          
+          // 現在の配置をカウント
+          newSchedule[shiftKey].forEach(empId => {
+            const emp = employees.find(e => e.id === empId);
+            if (emp) currentStaff[emp.type]++;
+          });
+
+          const availableEmployees = employees.filter(emp => {
+            // 既に配置済みの場合はスキップ
+            if (newSchedule[shiftKey].includes(emp.id)) return false;
+            
+            const requestKey = `${emp.id}-${day}`;
+            const hasRequestedOff = requestedDaysOff[requestKey];
+            const canWorkDay = emp.availableDays.includes(dayOfWeek);
+            const underHourLimit = employeeStats[emp.id].totalHours + shiftType.hours <= emp.maxHours;
+            const notTooConsecutive = employeeStats[emp.id].consecutiveDays < emp.maxConsecutiveDays;
+            const canWorkThisShift = emp.canWorkNight || shiftType.id !== 'night';
+            const notNGShift = !emp.ngShifts.includes(shiftType.id);
+            
+            return !hasRequestedOff && canWorkDay && underHourLimit && notTooConsecutive && canWorkThisShift && notNGShift;
+          }).sort((a, b) => {
+            // 必須ペアの優先
+            const aMustWork = a.mustWorkWith.some(id => newSchedule[shiftKey].includes(id));
+            const bMustWork = b.mustWorkWith.some(id => newSchedule[shiftKey].includes(id));
+            if (aMustWork && !bMustWork) return -1;
+            if (!aMustWork && bMustWork) return 1;
+            
+            // 希望シフトを優先
+            const aPrefers = a.preferredShifts.includes(shiftType.id);
+            const bPrefers = b.preferredShifts.includes(shiftType.id);
+            if (aPrefers && !bPrefers) return -1;
+            if (!aPrefers && bPrefers) return 1;
+            
+            // スキルレベルで優先順位付け
+            const skillOrder = { 'senior': 3, 'intermediate': 2, 'beginner': 1 };
+            return skillOrder[b.skillLevel] - skillOrder[a.skillLevel];
+          });
+
+          // 社員の配置
+          const availableRegular = availableEmployees.filter(emp => emp.type === '社員');
+          for (let i = 0; i < Math.min(requiredStaff.社員 - currentStaff.社員, availableRegular.length); i++) {
+            const employee = availableRegular[i];
+            const constraintCheck = checkConstraints(day, shiftType, newSchedule[shiftKey], employee.id);
+            
+            if (constraintCheck.valid) {
+              newSchedule[shiftKey].push(employee.id);
+              currentStaff.社員++;
+              
+              // 統計更新
+              employeeStats[employee.id].totalHours += shiftType.hours;
+              employeeStats[employee.id].consecutiveDays++;
+              employeeStats[employee.id].workedDays.push(day);
+            }
+          }
+          
+          // パートの配置
+          const availablePart = availableEmployees.filter(emp => emp.type === 'パート');
+          for (let i = 0; i < Math.min(requiredStaff.パート - currentStaff.パート, availablePart.length); i++) {
+            const employee = availablePart[i];
+            if (!newSchedule[shiftKey].includes(employee.id)) {
+              const constraintCheck = checkConstraints(day, shiftType, newSchedule[shiftKey], employee.id);
+              
+              if (constraintCheck.valid) {
+                newSchedule[shiftKey].push(employee.id);
+                currentStaff.パート++;
+                
+                // 統計更新
+                employeeStats[employee.id].totalHours += shiftType.hours;
+                employeeStats[employee.id].consecutiveDays++;
+                employeeStats[employee.id].workedDays.push(day);
+              }
+            }
+          }
+
+          // 必須ペアの確認と追加配置
+          const currentAssigned = [...newSchedule[shiftKey]];
+          currentAssigned.forEach(empId => {
+            const emp = employees.find(e => e.id === empId);
+            if (emp?.mustWorkWith.length > 0) {
+              emp.mustWorkWith.forEach(mustWorkId => {
+                if (!newSchedule[shiftKey].includes(mustWorkId)) {
+                  const mustWorkEmp = employees.find(e => e.id === mustWorkId);
+                  if (mustWorkEmp && availableEmployees.includes(mustWorkEmp)) {
+                    const constraintCheck = checkConstraints(day, shiftType, newSchedule[shiftKey], mustWorkId);
+                    if (constraintCheck.valid) {
+                      newSchedule[shiftKey].push(mustWorkId);
+                      employeeStats[mustWorkId].totalHours += shiftType.hours;
+                      employeeStats[mustWorkId].consecutiveDays++;
+                      employeeStats[mustWorkId].workedDays.push(day);
+                    }
+                  }
+                }
+              });
+            }
+          });
+        });
+        
+        // 連続勤務日数リセット（休みの場合）
+        employees.forEach(emp => {
+          const workedToday = shiftTypes.some(shift => {
+            const shiftKey = `${day}-${shift.id}`;
+            return newSchedule[shiftKey]?.includes(emp.id);
+          });
+          
+          if (!workedToday) {
+            employeeStats[emp.id].consecutiveDays = 0;
+          }
+        });
+      }
+      
+      setGeneratedSchedule(newSchedule);
+      setIsGenerating(false);
+    }, 1000);
+  }, [employees, currentMonth, requestedDaysOff, shiftTypes, constraints]);
+
+  // 従業員追加
+  const addEmployee = () => {
+    const id = Math.max(...employees.map(e => e.id), 0) + 1;
+    setEmployees(prev => [...prev, { ...newEmployee, id }]);
+    setNewEmployee({
+      name: '',
+      type: '社員',
+      maxHours: 40,
+      availableDays: [],
+      minRestDays: 2,
+      maxConsecutiveDays: 5,
+      canWorkNight: true,
+      preferredShifts: [],
+      skillLevel: 'intermediate',
+      hourlyRate: 1500,
+      ngCombinations: [],
+      ngShifts: [],
+      mustWorkWith: [],
+      cannotOpenStore: false,
+      cannotCloseStore: false,
+      needsSupervision: false,
+      canSupervise: false,
+      fixedShifts: {},
+      cannotDoTasks: [],
+      cannotDoTasks: [] // 実行できない業務のIDリスト
+    });
+    setShowAddEmployee(false);
+  };
+
+  // NGコンビネーションのトグル
+  const toggleNGCombination = (employeeId, targetId, isEditing = false) => {
+    if (isEditing) {
+      setEditingEmployee(prev => {
+        const ngCombinations = prev.ngCombinations.includes(targetId)
+          ? prev.ngCombinations.filter(id => id !== targetId)
+          : [...prev.ngCombinations, targetId];
+        return { ...prev, ngCombinations };
+      });
+    } else {
+      const ngCombinations = newEmployee.ngCombinations.includes(targetId)
+        ? newEmployee.ngCombinations.filter(id => id !== targetId)
+        : [...newEmployee.ngCombinations, targetId];
+      setNewEmployee(prev => ({ ...prev, ngCombinations }));
+    }
+  };
+
+  // 必須ペアのトグル
+  const toggleMustWorkWith = (employeeId, targetId, isEditing = false) => {
+    if (isEditing) {
+      setEditingEmployee(prev => {
+        const mustWorkWith = prev.mustWorkWith.includes(targetId)
+          ? prev.mustWorkWith.filter(id => id !== targetId)
+          : [...prev.mustWorkWith, targetId];
+        return { ...prev, mustWorkWith };
+      });
+    } else {
+      const mustWorkWith = newEmployee.mustWorkWith.includes(targetId)
+        ? newEmployee.mustWorkWith.filter(id => id !== targetId)
+        : [...newEmployee.mustWorkWith, targetId];
+      setNewEmployee(prev => ({ ...prev, mustWorkWith }));
+    }
+  };
+
+  // 業務タスク管理
+  const addBusinessTask = () => {
+    if (newBusinessTask.name.trim()) {
+      const id = Date.now().toString();
+      setBusinessTasks(prev => [...prev, { 
+        id, 
+        name: newBusinessTask.name, 
+        description: newBusinessTask.description 
+      }]);
+      setNewBusinessTask({ name: '', description: '' });
+    }
+  };
+
+  const updateBusinessTask = (id, field, value) => {
+    setBusinessTasks(prev => prev.map(task => 
+      task.id === id ? { ...task, [field]: value } : task
+    ));
+  };
+
+  const deleteBusinessTask = (id) => {
+    setBusinessTasks(prev => prev.filter(task => task.id !== id));
+    // 従業員の制限からも削除
+    setEmployees(prev => prev.map(emp => ({
+      ...emp,
+      cannotDoTasks: emp.cannotDoTasks.filter(taskId => taskId !== id)
+    })));
+  };
+
+  // NG組み合わせルール管理
+  const addNGRule = () => {
+    if (newNGRule.employee1 && newNGRule.employee2 && newNGRule.employee1 !== newNGRule.employee2) {
+      const id = Date.now();
+      setNgCombinationRules(prev => [...prev, {
+        id,
+        employee1: parseInt(newNGRule.employee1),
+        employee2: parseInt(newNGRule.employee2),
+        reason: newNGRule.reason,
+        isActive: true
+      }]);
+      setNewNGRule({ employee1: '', employee2: '', reason: '' });
+    }
+  };
+
+  const updateNGRule = (id, field, value) => {
+    setNgCombinationRules(prev => prev.map(rule => 
+      rule.id === id ? { ...rule, [field]: value } : rule
+    ));
+  };
+
+  const deleteNGRule = (id) => {
+    setNgCombinationRules(prev => prev.filter(rule => rule.id !== id));
+  };
+
+  const toggleNGRuleActive = (id) => {
+    setNgCombinationRules(prev => prev.map(rule => 
+      rule.id === id ? { ...rule, isActive: !rule.isActive } : rule
+    ));
+  };
+
+  // 業務タスクのトグル
+  const toggleBusinessTask = (employeeId, taskId, isEditing = false) => {
+    if (isEditing) {
+      setEditingEmployee(prev => {
+        const cannotDoTasks = prev.cannotDoTasks.includes(taskId)
+          ? prev.cannotDoTasks.filter(id => id !== taskId)
+          : [...prev.cannotDoTasks, taskId];
+        return { ...prev, cannotDoTasks };
+      });
+    } else {
+      const cannotDoTasks = newEmployee.cannotDoTasks.includes(taskId)
+        ? newEmployee.cannotDoTasks.filter(id => id !== taskId)
+        : [...newEmployee.cannotDoTasks, taskId];
+      setNewEmployee(prev => ({ ...prev, cannotDoTasks }));
+    }
+  };
+
+  // 制約チェック関数
+  const checkConstraints = (day, shiftType, assignedEmployees, employeeToAdd = null) => {
+    const currentAssigned = assignedEmployees.slice();
+    if (employeeToAdd) currentAssigned.push(employeeToAdd);
+
+    // NGコンビネーションチェック
+    for (let i = 0; i < currentAssigned.length; i++) {
+      for (let j = i + 1; j < currentAssigned.length; j++) {
+        const emp1 = employees.find(e => e.id === currentAssigned[i]);
+        const emp2 = employees.find(e => e.id === currentAssigned[j]);
+        if (emp1?.ngCombinations.includes(emp2?.id) || emp2?.ngCombinations.includes(emp1?.id)) {
+          return { valid: false, reason: `${emp1?.name}と${emp2?.name}はNG組み合わせです` };
+        }
+      }
+    }
+
+    // 監督者チェック
+    const supervisors = currentAssigned.filter(id => {
+      const emp = employees.find(e => e.id === id);
+      return emp?.canSupervise;
+    });
+    const needSupervision = currentAssigned.filter(id => {
+      const emp = employees.find(e => e.id === id);
+      return emp?.needsSupervision;
+    });
+
+    if (shiftConstraints[shiftType.id]?.needsSupervisor && supervisors.length === 0) {
+      return { valid: false, reason: '監督者が必要です' };
+    }
+
+    if (needSupervision.length > 0 && supervisors.length === 0) {
+      return { valid: false, reason: '監督が必要な従業員がいますが監督者がいません' };
+    }
+
+    // 開店・閉店業務チェック
+    if (shiftConstraints[shiftType.id]?.needsOpener) {
+      const canOpen = currentAssigned.some(id => {
+        const emp = employees.find(e => e.id === id);
+        return !emp?.cannotOpenStore;
+      });
+      if (!canOpen) {
+        return { valid: false, reason: '開店業務ができる従業員が必要です' };
+      }
+    }
+
+    if (shiftConstraints[shiftType.id]?.needsCloser) {
+      const canClose = currentAssigned.some(id => {
+        const emp = employees.find(e => e.id === id);
+        return !emp?.cannotCloseStore;
+      });
+      if (!canClose) {
+        return { valid: false, reason: '閉店業務ができる従業員が必要です' };
+      }
+    }
+
+    return { valid: true };
+  };
+
+  // 従業員削除
+  const deleteEmployee = (id) => {
+    setEmployees(prev => prev.filter(emp => emp.id !== id));
+  };
+
+  // 従業員編集
+  const startEditEmployee = (employee) => {
+    setEditingEmployee({ ...employee });
+  };
+
+  const saveEditEmployee = () => {
+    setEmployees(prev => prev.map(emp => 
+      emp.id === editingEmployee.id ? editingEmployee : emp
+    ));
+    setEditingEmployee(null);
+  };
+
+  const cancelEditEmployee = () => {
+    setEditingEmployee(null);
+  };
+
+  // 曜日選択のトグル
+  const toggleDay = (days, day, setter) => {
+    const newDays = days.includes(day) 
+      ? days.filter(d => d !== day)
+      : [...days, day];
+    setter(newDays);
+  };
+
+  // シフト選択のトグル
+  const toggleShift = (shifts, shift, setter) => {
+    const newShifts = shifts.includes(shift)
+      ? shifts.filter(s => s !== shift)
+      : [...shifts, shift];
+    setter(newShifts);
+  };
+
+  const daysInMonth = getDaysInMonth(currentMonth);
+
+  return (
+    <div className="max-w-7xl mx-auto p-6 bg-gray-50 min-h-screen">
+      <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold text-gray-800 flex items-center">
+            <Calendar className="mr-3 text-blue-600" />
+            自動シフト作成システム
+          </h1>
+          <div className="flex items-center space-x-4">
+            <input
+              type="month"
+              value={currentMonth}
+              onChange={(e) => setCurrentMonth(e.target.value)}
+              className="px-3 py-2 border rounded-lg"
+            />
+            <button
+              onClick={() => setShowConstraintSettings(true)}
+              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 flex items-center"
+            >
+              <Settings className="mr-2" size={16} />
+              制約設定
+            </button>
+            <button
+              onClick={generateSchedule}
+              disabled={isGenerating}
+              className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center"
+            >
+              {isGenerating ? (
+                <div className="animate-spin mr-2">⟳</div>
+              ) : (
+                <Play className="mr-2" size={16} />
+              )}
+              {isGenerating ? '生成中...' : 'シフト生成'}
+            </button>
+          </div>
+        </div>
+
+        {/* 制約設定モーダル */}
+        {showConstraintSettings && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-4xl max-h-[90vh] overflow-y-auto">
+              <h3 className="text-xl font-semibold mb-4">制約設定</h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-medium mb-3">シフト別制約</h4>
+                  {shiftTypes.map(shift => (
+                    <div key={shift.id} className="border rounded-lg p-3 mb-3">
+                      <div className="font-medium mb-2">{shift.name}</div>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={shiftConstraints[shift.id]?.needsOpener || false}
+                            onChange={(e) => setShiftConstraints(prev => ({
+                              ...prev,
+                              [shift.id]: { ...prev[shift.id], needsOpener: e.target.checked }
+                            }))}
+                            className="mr-2"
+                          />
+                          <label>開店業務必要</label>
+                        </div>
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={shiftConstraints[shift.id]?.needsCloser || false}
+                            onChange={(e) => setShiftConstraints(prev => ({
+                              ...prev,
+                              [shift.id]: { ...prev[shift.id], needsCloser: e.target.checked }
+                            }))}
+                            className="mr-2"
+                          />
+                          <label>閉店業務必要</label>
+                        </div>
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={shiftConstraints[shift.id]?.needsSupervisor || false}
+                            onChange={(e) => setShiftConstraints(prev => ({
+                              ...prev,
+                              [shift.id]: { ...prev[shift.id], needsSupervisor: e.target.checked }
+                            }))}
+                            className="mr-2"
+                          />
+                          <label>監督者必要</label>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <div>
+                  <h4 className="font-medium mb-3">全体制約</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">最大連続勤務日数</label>
+                      <input
+                        type="number"
+                        value={globalConstraints.maxConsecutiveDays}
+                        onChange={(e) => setGlobalConstraints(prev => ({ ...prev, maxConsecutiveDays: parseInt(e.target.value) }))}
+                        className="w-full px-2 py-1 border rounded"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">シフト間最低休憩時間</label>
+                      <input
+                        type="number"
+                        value={globalConstraints.minRestBetweenShifts}
+                        onChange={(e) => setGlobalConstraints(prev => ({ ...prev, minRestBetweenShifts: parseInt(e.target.value) }))}
+                        className="w-full px-2 py-1 border rounded"
+                      />
+                    </div>
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={globalConstraints.noBackToBackNightShifts}
+                        onChange={(e) => setGlobalConstraints(prev => ({ ...prev, noBackToBackNightShifts: e.target.checked }))}
+                        className="mr-2"
+                      />
+                      <label className="text-sm">夜勤連続禁止</label>
+                    </div>
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={globalConstraints.allowSameShiftNGCombos}
+                        onChange={(e) => setGlobalConstraints(prev => ({ ...prev, allowSameShiftNGCombos: e.target.checked }))}
+                        className="mr-2"
+                      />
+                      <label className="text-sm">同シフト内NG組み合わせ許可</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex justify-end gap-2 mt-6">
+                <button
+                  onClick={() => setShowConstraintSettings(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  閉じる
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 従業員管理セクション */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold flex items-center">
+              <Users className="mr-2 text-green-600" />
+              従業員管理
+            </h2>
+            <button
+              onClick={() => setShowAddEmployee(true)}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center"
+            >
+              <Users className="mr-2" size={16} />
+              従業員追加
+            </button>
+          </div>
+
+          {/* 従業員追加フォーム */}
+          {showAddEmployee && (
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-6 mb-6">
+              <h3 className="text-lg font-semibold mb-4">新しい従業員を追加</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">名前</label>
+                  <input
+                    type="text"
+                    value={newEmployee.name}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                    placeholder="従業員名を入力"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">雇用形態</label>
+                  <select
+                    value={newEmployee.type}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, type: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  >
+                    <option value="社員">社員</option>
+                    <option value="パート">パート</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">最大勤務時間/週</label>
+                  <input
+                    type="number"
+                    value={newEmployee.maxHours}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, maxHours: parseInt(e.target.value) }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">最低休日数/週</label>
+                  <input
+                    type="number"
+                    value={newEmployee.minRestDays}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, minRestDays: parseInt(e.target.value) }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">最大連続勤務日数</label>
+                  <input
+                    type="number"
+                    value={newEmployee.maxConsecutiveDays}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, maxConsecutiveDays: parseInt(e.target.value) }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">時給</label>
+                  <input
+                    type="number"
+                    value={newEmployee.hourlyRate}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, hourlyRate: parseInt(e.target.value) }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">スキルレベル</label>
+                  <select
+                    value={newEmployee.skillLevel}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, skillLevel: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  >
+                    <option value="beginner">初級</option>
+                    <option value="intermediate">中級</option>
+                    <option value="senior">上級</option>
+                  </select>
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newEmployee.canWorkNight}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, canWorkNight: e.target.checked }))}
+                    className="mr-2"
+                  />
+                  <label className="text-sm font-medium">夜勤可能</label>
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newEmployee.canSupervise}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, canSupervise: e.target.checked }))}
+                    className="mr-2"
+                  />
+                  <label className="text-sm font-medium">監督可能</label>
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newEmployee.needsSupervision}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, needsSupervision: e.target.checked }))}
+                    className="mr-2"
+                  />
+                  <label className="text-sm font-medium">監督必要</label>
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newEmployee.cannotOpenStore}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, cannotOpenStore: e.target.checked }))}
+                    className="mr-2"
+                  />
+                  <label className="text-sm font-medium">開店業務不可</label>
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newEmployee.cannotCloseStore}
+                    onChange={(e) => setNewEmployee(prev => ({ ...prev, cannotCloseStore: e.target.checked }))}
+                    className="mr-2"
+                  />
+                  <label className="text-sm font-medium">閉店業務不可</label>
+                </div>
+              </div>
+              
+              <div className="mt-4">
+                <label className="block text-sm font-medium mb-2">勤務可能曜日</label>
+                <div className="flex gap-2">
+                  {['月', '火', '水', '木', '金', '土', '日'].map(day => (
+                    <button
+                      key={day}
+                      onClick={() => toggleDay(newEmployee.availableDays, day, (days) => setNewEmployee(prev => ({ ...prev, availableDays: days })))}
+                      className={`px-3 py-2 rounded ${
+                        newEmployee.availableDays.includes(day)
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {day}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium mb-2">希望シフト</label>
+                <div className="flex gap-2">
+                  {shiftTypes.map(shift => (
+                    <button
+                      key={shift.id}
+                      onClick={() => toggleShift(newEmployee.preferredShifts, shift.id, (shifts) => setNewEmployee(prev => ({ ...prev, preferredShifts: shifts })))}
+                      className={`px-3 py-2 rounded text-sm ${
+                        newEmployee.preferredShifts.includes(shift.id)
+                          ? 'bg-green-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {shift.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium mb-2">NGシフト</label>
+                <div className="flex gap-2">
+                  {shiftTypes.map(shift => (
+                    <button
+                      key={shift.id}
+                      onClick={() => toggleShift(newEmployee.ngShifts, shift.id, (shifts) => setNewEmployee(prev => ({ ...prev, ngShifts: shifts })))}
+                      className={`px-3 py-2 rounded text-sm ${
+                        newEmployee.ngShifts.includes(shift.id)
+                          ? 'bg-red-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {shift.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium mb-2">NG組み合わせ</label>
+                <div className="flex flex-wrap gap-2">
+                  {employees.map(emp => (
+                    <button
+                      key={emp.id}
+                      onClick={() => toggleNGCombination(null, emp.id)}
+                      className={`px-3 py-2 rounded text-sm ${
+                        newEmployee.ngCombinations.includes(emp.id)
+                          ? 'bg-red-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {emp.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium mb-2">必須ペア</label>
+                <div className="flex flex-wrap gap-2">
+                  {employees.map(emp => (
+                    <button
+                      key={emp.id}
+                      onClick={() => toggleMustWorkWith(null, emp.id)}
+                      className={`px-3 py-2 rounded text-sm ${
+                        newEmployee.mustWorkWith.includes(emp.id)
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {emp.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 mt-6">
+                <button
+                  onClick={() => setShowAddEmployee(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={addEmployee}
+                  disabled={!newEmployee.name}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                >
+                  追加
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4">
+            {employees.map(emp => (
+              <div key={emp.id} className="border rounded-lg p-4 bg-white shadow-sm">
+                {editingEmployee && editingEmployee.id === emp.id ? (
+                  // 編集モード
+                  <div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-1">名前</label>
+                        <input
+                          type="text"
+                          value={editingEmployee.name}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full px-2 py-1 border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">雇用形態</label>
+                        <select
+                          value={editingEmployee.type}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, type: e.target.value }))}
+                          className="w-full px-2 py-1 border rounded"
+                        >
+                          <option value="社員">社員</option>
+                          <option value="パート">パート</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">最大時間/週</label>
+                        <input
+                          type="number"
+                          value={editingEmployee.maxHours}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, maxHours: parseInt(e.target.value) }))}
+                          className="w-full px-2 py-1 border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">時給</label>
+                        <input
+                          type="number"
+                          value={editingEmployee.hourlyRate}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, hourlyRate: parseInt(e.target.value) }))}
+                          className="w-full px-2 py-1 border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">最低休日数</label>
+                        <input
+                          type="number"
+                          value={editingEmployee.minRestDays}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, minRestDays: parseInt(e.target.value) }))}
+                          className="w-full px-2 py-1 border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">最大連続日数</label>
+                        <input
+                          type="number"
+                          value={editingEmployee.maxConsecutiveDays}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, maxConsecutiveDays: parseInt(e.target.value) }))}
+                          className="w-full px-2 py-1 border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">スキルレベル</label>
+                        <select
+                          value={editingEmployee.skillLevel}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, skillLevel: e.target.value }))}
+                          className="w-full px-2 py-1 border rounded"
+                        >
+                          <option value="beginner">初級</option>
+                          <option value="intermediate">中級</option>
+                          <option value="senior">上級</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editingEmployee.canWorkNight}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, canWorkNight: e.target.checked }))}
+                          className="mr-2"
+                        />
+                        <label className="text-sm font-medium">夜勤可能</label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editingEmployee.canSupervise}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, canSupervise: e.target.checked }))}
+                          className="mr-2"
+                        />
+                        <label className="text-sm font-medium">監督可能</label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editingEmployee.needsSupervision}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, needsSupervision: e.target.checked }))}
+                          className="mr-2"
+                        />
+                        <label className="text-sm font-medium">監督必要</label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editingEmployee.cannotOpenStore}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, cannotOpenStore: e.target.checked }))}
+                          className="mr-2"
+                        />
+                        <label className="text-sm font-medium">開店業務不可</label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editingEmployee.cannotCloseStore}
+                          onChange={(e) => setEditingEmployee(prev => ({ ...prev, cannotCloseStore: e.target.checked }))}
+                          className="mr-2"
+                        />
+                        <label className="text-sm font-medium">閉店業務不可</label>
+                      </div>
+                    </div>
+                    
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-2">勤務可能曜日</label>
+                      <div className="flex gap-2">
+                        {['月', '火', '水', '木', '金', '土', '日'].map(day => (
+                          <button
+                            key={day}
+                            onClick={() => toggleDay(editingEmployee.availableDays, day, (days) => setEditingEmployee(prev => ({ ...prev, availableDays: days })))}
+                            className={`px-2 py-1 rounded text-sm ${
+                              editingEmployee.availableDays.includes(day)
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {day}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-2">希望シフト</label>
+                      <div className="flex gap-2">
+                        {shiftTypes.map(shift => (
+                          <button
+                            key={shift.id}
+                            onClick={() => toggleShift(editingEmployee.preferredShifts, shift.id, (shifts) => setEditingEmployee(prev => ({ ...prev, preferredShifts: shifts })))}
+                            className={`px-2 py-1 rounded text-sm ${
+                              editingEmployee.preferredShifts.includes(shift.id)
+                                ? 'bg-green-600 text-white'
+                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {shift.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-2">NGシフト</label>
+                      <div className="flex gap-2">
+                        {shiftTypes.map(shift => (
+                          <button
+                            key={shift.id}
+                            onClick={() => toggleShift(editingEmployee.ngShifts, shift.id, (shifts) => setEditingEmployee(prev => ({ ...prev, ngShifts: shifts })))}
+                            className={`px-2 py-1 rounded text-sm ${
+                              editingEmployee.ngShifts.includes(shift.id)
+                                ? 'bg-red-600 text-white'
+                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {shift.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-2">NG組み合わせ</label>
+                      <div className="flex flex-wrap gap-2">
+                        {employees.filter(e => e.id !== editingEmployee.id).map(emp => (
+                          <button
+                            key={emp.id}
+                            onClick={() => toggleNGCombination(editingEmployee.id, emp.id, true)}
+                            className={`px-2 py-1 rounded text-sm ${
+                              editingEmployee.ngCombinations.includes(emp.id)
+                                ? 'bg-red-600 text-white'
+                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {emp.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-2">必須ペア</label>
+                      <div className="flex flex-wrap gap-2">
+                        {employees.filter(e => e.id !== editingEmployee.id).map(emp => (
+                          <button
+                            key={emp.id}
+                            onClick={() => toggleMustWorkWith(editingEmployee.id, emp.id, true)}
+                            className={`px-2 py-1 rounded text-sm ${
+                              editingEmployee.mustWorkWith.includes(emp.id)
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                          >
+                            {emp.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={cancelEditEmployee}
+                        className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 text-sm"
+                      >
+                        キャンセル
+                      </button>
+                      <button
+                        onClick={saveEditEmployee}
+                        className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                      >
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // 表示モード
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center">
+                        <div className="font-medium text-lg mr-3">{emp.name}</div>
+                        <span className={`px-2 py-1 rounded text-xs ${emp.type === '社員' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
+                          {emp.type}
+                        </span>
+                        <span className={`ml-2 px-2 py-1 rounded text-xs ${
+                          emp.skillLevel === 'senior' ? 'bg-purple-100 text-purple-800' :
+                          emp.skillLevel === 'intermediate' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {emp.skillLevel === 'senior' ? '上級' : emp.skillLevel === 'intermediate' ? '中級' : '初級'}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => startEditEmployee(emp)}
+                          className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                        >
+                          編集
+                        </button>
+                        <button
+                          onClick={() => deleteEmployee(emp.id)}
+                          className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+                        >
+                          削除
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-600">最大時間:</span>
+                        <span className="ml-1 font-medium">{emp.maxHours}h/週</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">時給:</span>
+                        <span className="ml-1 font-medium">¥{emp.hourlyRate}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">最低休日:</span>
+                        <span className="ml-1 font-medium">{emp.minRestDays}日/週</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">最大連続:</span>
+                        <span className="ml-1 font-medium">{emp.maxConsecutiveDays}日</span>
+                      </div>
+                    </div>
+                    
+                    <div className="mt-3 text-sm space-y-2">
+                      <div>
+                        <span className="text-gray-600">勤務可能日:</span>
+                        <span className="ml-1">{emp.availableDays.join(', ')}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">希望シフト:</span>
+                        <span className="ml-1">{emp.preferredShifts.map(id => shiftTypes.find(s => s.id === id)?.name).join(', ')}</span>
+                      </div>
+                      {emp.ngShifts.length > 0 && (
+                        <div>
+                          <span className="text-gray-600">NGシフト:</span>
+                          <span className="ml-1 text-red-600">{emp.ngShifts.map(id => shiftTypes.find(s => s.id === id)?.name).join(', ')}</span>
+                        </div>
+                      )}
+                      {emp.ngCombinations.length > 0 && (
+                        <div>
+                          <span className="text-gray-600">NG組み合わせ:</span>
+                          <span className="ml-1 text-red-600">{emp.ngCombinations.map(id => employees.find(e => e.id === id)?.name).join(', ')}</span>
+                        </div>
+                      )}
+                      {emp.mustWorkWith.length > 0 && (
+                        <div>
+                          <span className="text-gray-600">必須ペア:</span>
+                          <span className="ml-1 text-purple-600">{emp.mustWorkWith.map(id => employees.find(e => e.id === id)?.name).join(', ')}</span>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <span className={`px-2 py-1 rounded text-xs ${emp.canWorkNight ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                          夜勤: {emp.canWorkNight ? '可能' : '不可'}
+                        </span>
+                        <span className={`px-2 py-1 rounded text-xs ${emp.canSupervise ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}`}>
+                          監督: {emp.canSupervise ? '可能' : '不可'}
+                        </span>
+                        {emp.needsSupervision && (
+                          <span className="px-2 py-1 rounded text-xs bg-yellow-100 text-yellow-800">監督必要</span>
+                        )}
+                        {emp.cannotOpenStore && (
+                          <span className="px-2 py-1 rounded text-xs bg-red-100 text-red-800">開店業務不可</span>
+                        )}
+                        {emp.cannotCloseStore && (
+                          <span className="px-2 py-1 rounded text-xs bg-red-100 text-red-800">閉店業務不可</span>
+                        )}
+                        {Object.keys(emp.fixedShifts).length > 0 && (
+                          <span className="px-2 py-1 rounded text-xs bg-purple-100 text-purple-800">固定シフトあり</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 希望休設定 */}
+        <div className="mb-8">
+          <h2 className="text-xl font-semibold mb-4 flex items-center">
+            <Settings className="mr-2 text-purple-600" />
+            希望休設定
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse border border-gray-300">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="border border-gray-300 p-2 text-left">従業員</th>
+                  {Array.from({ length: daysInMonth }, (_, i) => (
+                    <th key={i} className="border border-gray-300 p-1 text-center min-w-8">
+                      <div className="text-xs">{i + 1}</div>
+                      <div className="text-xs text-gray-500">{getDayOfWeek(currentMonth, i + 1)}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {employees.map(emp => (
+                  <tr key={emp.id}>
+                    <td className="border border-gray-300 p-2 font-medium">{emp.name}</td>
+                    {Array.from({ length: daysInMonth }, (_, i) => {
+                      const day = i + 1;
+                      const key = `${emp.id}-${day}`;
+                      const isRequested = requestedDaysOff[key];
+                      return (
+                        <td key={day} className="border border-gray-300 p-1 text-center">
+                          <button
+                            onClick={() => toggleRequestedDayOff(emp.id, day)}
+                            className={`w-6 h-6 rounded ${isRequested ? 'bg-red-500 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+                          >
+                            {isRequested ? '休' : ''}
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* 生成されたシフト表 */}
+        {Object.keys(generatedSchedule).length > 0 && (
+          <div>
+            <h2 className="text-xl font-semibold mb-4 flex items-center">
+              <Clock className="mr-2 text-orange-600" />
+              生成されたシフト表
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse border border-gray-300">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border border-gray-300 p-2 text-left">シフト</th>
+                    {Array.from({ length: daysInMonth }, (_, i) => (
+                      <th key={i} className="border border-gray-300 p-1 text-center min-w-20">
+                        <div className="text-sm font-bold">{i + 1}</div>
+                        <div className="text-xs text-gray-500">{getDayOfWeek(currentMonth, i + 1)}</div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {shiftTypes.map(shift => (
+                    <tr key={shift.id}>
+                      <td className="border border-gray-300 p-2 font-medium bg-blue-50">
+                        <div className="text-sm font-bold">{shift.name}</div>
+                        <div className="text-xs text-gray-600">{shift.time}</div>
+                      </td>
+                      {Array.from({ length: daysInMonth }, (_, i) => {
+                        const day = i + 1;
+                        const shiftKey = `${day}-${shift.id}`;
+                        const assignedEmployees = generatedSchedule[shiftKey] || [];
+                        return (
+                          <td key={day} className="border border-gray-300 p-1 text-center">
+                            <div className="space-y-1">
+                              {assignedEmployees.map(empId => {
+                                const employee = employees.find(e => e.id === empId);
+                                return (
+                                  <div
+                                    key={empId}
+                                    className={`text-xs px-1 py-1 rounded ${
+                                      employee?.type === '社員' 
+                                        ? 'bg-blue-100 text-blue-800' 
+                                        : 'bg-green-100 text-green-800'
+                                    } ${
+                                      employee?.fixedShifts[day] === shift.id ? 'ring-2 ring-purple-500' : ''
+                                    }`}
+                                    title={`${employee?.name} ${employee?.fixedShifts[day] === shift.id ? '(固定)' : ''}`}
+                                  >
+                                    {employee?.name.slice(0, 3)}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 統計情報 */}
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {employees.map(emp => {
+                const totalHours = Object.keys(generatedSchedule).reduce((total, key) => {
+                  if (generatedSchedule[key].includes(emp.id)) {
+                    const shiftId = key.split('-')[1];
+                    const shift = shiftTypes.find(s => s.id === shiftId);
+                    return total + (shift?.hours || 0);
+                  }
+                  return total;
+                }, 0);
+
+                return (
+                  <div key={emp.id} className="bg-gray-50 rounded-lg p-4">
+                    <div className="font-medium">{emp.name}</div>
+                    <div className="text-sm text-gray-600">
+                      総勤務時間: {totalHours}時間 / {emp.maxHours}時間
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                      <div
+                        className={`h-2 rounded-full ${
+                          totalHours > emp.maxHours ? 'bg-red-500' : 'bg-green-500'
+                        }`}
+                        style={{ width: `${Math.min(100, (totalHours / emp.maxHours) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default ShiftScheduler;
+
